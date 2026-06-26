@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { login } from '@/lib/actions';
 import { Shield, Users, TrendingUp, CheckCircle } from 'lucide-react';
 
@@ -9,11 +9,6 @@ export default function HomePage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    // Seed database on first load
-    fetch('/api/seed').catch(console.error);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,12 +26,6 @@ export default function HomePage() {
       setLoading(false);
     }
   };
-
-  const demoCredentials = [
-    { role: 'Admin', email: 'admin@system.com', password: 'admin123' },
-    { role: 'Supervisor', email: 'supervisor@system.com', password: 'supervisor123' },
-    { role: 'Student', email: 'alice@student.com', password: 'student123' },
-  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -124,31 +113,9 @@ export default function HomePage() {
               </button>
             </form>
 
-            {/* Demo Credentials */}
-            <div className="mt-6 pt-6 border-t border-slate-200">
-              <p className="text-sm font-medium text-slate-700 mb-3 text-center">
-                Demo Credentials
-              </p>
-              <div className="space-y-2">
-                {demoCredentials.map((cred) => (
-                  <button
-                    key={cred.role}
-                    onClick={() => {
-                      setEmail(cred.email);
-                      setPassword(cred.password);
-                    }}
-                    className="w-full text-left px-3 py-2 bg-slate-50 hover:bg-slate-100 rounded-lg text-sm transition-colors"
-                  >
-                    <span className="font-medium">{cred.role}:</span>{' '}
-                    <span className="text-slate-600">{cred.email}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="mt-4 text-center">
               <a href="/help" className="text-sm text-blue-600 hover:underline">
-                📖 System Documentation & Help
+                System Documentation & Help
               </a>
             </div>
           </div>
