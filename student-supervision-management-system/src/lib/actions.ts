@@ -10,25 +10,39 @@ import { redirect } from 'next/navigation';
 
 // Authentication Actions
 export async function login(email: string, password: string) {
-  const [user] = await db.select().from(users).where(eq(users.email, email));
+  try {
+    // Validate input
+    if (!email || !password) {
+      return { error: 'Email and password are required' };
+    }
+    
+    if (!email.includes('@')) {
+      return { error: 'Please enter a valid email address' };
+    }
 
-  if (!user) {
-    return { error: 'Invalid credentials' };
-  }
+    const [user] = await db.select().from(users).where(eq(users.email, email));
 
-  const validPassword = await verifyPassword(password, user.password);
-  if (!validPassword) {
-    return { error: 'Invalid credentials' };
-  }
+    if (!user) {
+      return { error: 'Invalid email or password' };
+    }
 
-  await createSession(user.id);
+    const validPassword = await verifyPassword(password, user.password);
+    if (!validPassword) {
+      return { error: 'Invalid email or password' };
+    }
 
-  if (user.role === 'student') {
-    redirect('/student');
-  } else if (user.role === 'supervisor') {
-    redirect('/supervisor');
-  } else {
-    redirect('/admin');
+    await createSession(user.id);
+
+    if (user.role === 'student') {
+      redirect('/student');
+    } else if (user.role === 'supervisor') {
+      redirect('/supervisor');
+    } else {
+      redirect('/admin');
+    }
+  } catch (error: any) {
+    console.error('[Auth Error] Login failed:', error);
+    return { error: 'Login failed. Please try again later.' };
   }
 }
 
@@ -98,54 +112,112 @@ export async function checkIn(data: {
   ipAddress?: string;
   deviceFingerprint?: string;
 }) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'student') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'student') {
+      return { error: 'You must be logged in as a student to check in' };
+    }
 
-  const [student] = await db.select().from(students).where(eq(students.userId, user.id));
-  if (!student) throw new Error('Student not found');
+    if (!data.workMode || !['remote', 'office'].includes(data.workMode)) {
+      return { error: 'Please select a valid work mode (remote or office)' };
+    }
 
-  const today = getTodayDate();
-  const checkInTime = new Date();
-  const status = getCheckInStatus(checkInTime) === 'on_time' ? 'present' : 'late';
+    if (!data.location || typeof data.location.lat !== 'number' || typeof data.location.lng !== 'number') {
+      return { error: 'Location data is required. Please enable GPS permissions.' };
+    }
 
-  await db.insert(attendance).values({
-    id: generateId(),
-    studentId: student.id,
-    date: today,
-    checkInTime,
-    workMode: data.workMode,
-    status,
-    location: data.location,
-    ipAddress: data.ipAddress,
-    deviceFingerprint: data.deviceFingerprint,
-    selfiePhoto: data.selfiePhoto,
-    qrCodeScanned: data.workMode === 'office',
-  });
+    const [student] = await db.select().from(students).where(eq(students.userId, user.id));
+    if (!student) {
+      return { error: 'Student record not found. Please contact administrator.' };
+    }
 
-  revalidatePath('/student');
-  return { success: true };
+    const today = getTodayDate();
+    
+    // Check if already checked in today
+    const [existingCheckIn] = await db
+      .select()
+      .from(attendance)
+      .where(and(eq(attendance.studentId, student.id), eq(attendance.date, today)));
+    
+    if (existingCheckIn && existingCheckIn.checkInTime && !existingCheckIn.checkOutTime) {
+      return { error: 'You are already checked in. Please check out before checking in again.' };
+    }
+
+    const checkInTime = new Date();
+    const status = getCheckInStatus(checkInTime) === 'on_time' ? 'present' : 'late';
+
+    await db.insert(attendance).values({
+      id: generateId(),
+      studentId: student.id,
+      date: today,
+      checkInTime,
+      workMode: data.workMode,
+      status,
+      location: data.location,
+      ipAddress: data.ipAddress,
+      deviceFingerprint: data.deviceFingerprint,
+      selfiePhoto: data.selfiePhoto,
+      qrCodeScanned: data.workMode === 'office',
+    });
+
+    revalidatePath('/student');
+    return { success: true, message: `Checked in successfully at ${checkInTime.toLocaleTimeString()}` };
+  } catch (error: any) {
+    console.error('[CheckIn Error]:', error);
+    return { error: 'Check-in failed. Please try again.' };
+  }
 }
 
 export async function checkOut(data: { dailySummary: string; challenges: string }) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'student') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'student') {
+      return { error: 'You must be logged in as a student to check out' };
+    }
 
-  const [student] = await db.select().from(students).where(eq(students.userId, user.id));
-  if (!student) throw new Error('Student not found');
+    if (!data.dailySummary || data.dailySummary.trim().length === 0) {
+      return { error: 'Daily summary is required' };
+    }
 
-  const today = getTodayDate();
+    if (data.dailySummary.trim().length < 10) {
+      return { error: 'Daily summary must be at least 10 characters long' };
+    }
 
-  await db
-    .update(attendance)
-    .set({
-      checkOutTime: new Date(),
-      dailySummary: data.dailySummary,
-      challenges: data.challenges,
-    })
-    .where(and(eq(attendance.studentId, student.id), eq(attendance.date, today)));
+    const [student] = await db.select().from(students).where(eq(students.userId, user.id));
+    if (!student) {
+      return { error: 'Student record not found. Please contact administrator.' };
+    }
 
-  revalidatePath('/student');
-  return { success: true };
+    const today = getTodayDate();
+
+    const [existingCheckIn] = await db
+      .select()
+      .from(attendance)
+      .where(and(eq(attendance.studentId, student.id), eq(attendance.date, today)));
+
+    if (!existingCheckIn || !existingCheckIn.checkInTime) {
+      return { error: 'You have not checked in today. Please check in first.' };
+    }
+
+    if (existingCheckIn.checkOutTime) {
+      return { error: 'You have already checked out today.' };
+    }
+
+    await db
+      .update(attendance)
+      .set({
+        checkOutTime: new Date(),
+        dailySummary: data.dailySummary,
+        challenges: data.challenges,
+      })
+      .where(and(eq(attendance.studentId, student.id), eq(attendance.date, today)));
+
+    revalidatePath('/student');
+    return { success: true, message: 'Checked out successfully' };
+  } catch (error: any) {
+    console.error('[CheckOut Error]:', error);
+    return { error: 'Check-out failed. Please try again.' };
+  }
 }
 
 export async function submitEvidence(data: {
@@ -154,24 +226,51 @@ export async function submitEvidence(data: {
   evidenceUrl?: string;
   description: string;
 }) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'student') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'student') {
+      return { error: 'You must be logged in as a student to submit evidence' };
+    }
 
-  const [student] = await db.select().from(students).where(eq(students.userId, user.id));
-  if (!student) throw new Error('Student not found');
+    if (!data.taskId) {
+      return { error: 'Task ID is required' };
+    }
 
-  await db.insert(workEvidence).values({
-    id: generateId(),
-    taskId: data.taskId,
-    studentId: student.id,
-    evidenceType: data.evidenceType,
-    evidenceUrl: data.evidenceUrl,
-    description: data.description,
-    status: 'submitted',
-  });
+    if (!data.description || data.description.trim().length === 0) {
+      return { error: 'Description is required' };
+    }
 
-  revalidatePath('/student');
-  return { success: true };
+    if (data.description.trim().length < 5) {
+      return { error: 'Description must be at least 5 characters long' };
+    }
+
+    const [student] = await db.select().from(students).where(eq(students.userId, user.id));
+    if (!student) {
+      return { error: 'Student record not found' };
+    }
+
+    // Verify task exists and belongs to student
+    const [task] = await db.select().from(tasks).where(eq(tasks.id, data.taskId));
+    if (!task || task.studentId !== student.id) {
+      return { error: 'Task not found or does not belong to you' };
+    }
+
+    await db.insert(workEvidence).values({
+      id: generateId(),
+      taskId: data.taskId,
+      studentId: student.id,
+      evidenceType: data.evidenceType,
+      evidenceUrl: data.evidenceUrl,
+      description: data.description,
+      status: 'submitted',
+    });
+
+    revalidatePath('/student');
+    return { success: true, message: 'Evidence submitted successfully' };
+  } catch (error: any) {
+    console.error('[Evidence Error]:', error);
+    return { error: 'Failed to submit evidence. Please try again.' };
+  }
 }
 
 export async function updateTaskStatus(taskId: string, status: 'pending' | 'in_progress' | 'completed') {
@@ -266,42 +365,101 @@ export async function assignTask(data: {
   deadline: Date;
   expectedDeliverables: string;
 }) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'supervisor') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'supervisor') {
+      return { error: 'You must be logged in as a supervisor to assign tasks' };
+    }
 
-  const [supervisor] = await db.select().from(supervisors).where(eq(supervisors.userId, user.id));
-  if (!supervisor) throw new Error('Supervisor not found');
+    if (!data.studentId) {
+      return { error: 'Student ID is required' };
+    }
 
-  await db.insert(tasks).values({
-    id: generateId(),
-    studentId: data.studentId,
-    supervisorId: supervisor.id,
-    title: data.title,
-    description: data.description,
-    priority: data.priority,
-    deadline: data.deadline,
-    expectedDeliverables: data.expectedDeliverables,
-    status: 'pending',
-  });
+    if (!data.title || data.title.trim().length === 0) {
+      return { error: 'Task title is required' };
+    }
 
-  revalidatePath('/supervisor');
-  return { success: true };
+    if (!data.description || data.description.trim().length === 0) {
+      return { error: 'Task description is required' };
+    }
+
+    if (!data.deadline || new Date(data.deadline) <= new Date()) {
+      return { error: 'Deadline must be in the future' };
+    }
+
+    if (!data.expectedDeliverables || data.expectedDeliverables.trim().length === 0) {
+      return { error: 'Expected deliverables are required' };
+    }
+
+    const [supervisor] = await db.select().from(supervisors).where(eq(supervisors.userId, user.id));
+    if (!supervisor) {
+      return { error: 'Supervisor record not found' };
+    }
+
+    // Verify student exists and is assigned to this supervisor
+    const [student] = await db.select().from(students).where(eq(students.id, data.studentId));
+    if (!student || student.supervisorId !== supervisor.id) {
+      return { error: 'Student not found or is not assigned to you' };
+    }
+
+    await db.insert(tasks).values({
+      id: generateId(),
+      studentId: data.studentId,
+      supervisorId: supervisor.id,
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      deadline: data.deadline,
+      expectedDeliverables: data.expectedDeliverables,
+      status: 'pending',
+    });
+
+    revalidatePath('/supervisor');
+    return { success: true, message: 'Task assigned successfully' };
+  } catch (error: any) {
+    console.error('[Task Error]:', error);
+    return { error: 'Failed to assign task. Please try again.' };
+  }
 }
 
 export async function reviewEvidence(evidenceId: string, status: 'approved' | 'rejected', feedback: string) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'supervisor') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'supervisor') {
+      return { error: 'You must be logged in as a supervisor to review evidence' };
+    }
 
-  await db
-    .update(workEvidence)
-    .set({
-      status,
-      supervisorFeedback: feedback,
-    })
-    .where(eq(workEvidence.id, evidenceId));
+    if (!evidenceId) {
+      return { error: 'Evidence ID is required' };
+    }
 
-  revalidatePath('/supervisor');
-  return { success: true };
+    if (!['approved', 'rejected'].includes(status)) {
+      return { error: 'Invalid status. Must be approved or rejected.' };
+    }
+
+    if (!feedback || feedback.trim().length === 0) {
+      return { error: 'Feedback is required' };
+    }
+
+    const [evidence] = await db.select().from(workEvidence).where(eq(workEvidence.id, evidenceId));
+    if (!evidence) {
+      return { error: 'Evidence not found' };
+    }
+
+    await db
+      .update(workEvidence)
+      .set({
+        status,
+        supervisorFeedback: feedback,
+      })
+      .where(eq(workEvidence.id, evidenceId));
+
+    revalidatePath('/supervisor');
+    return { success: true, message: `Evidence ${status} successfully` };
+  } catch (error: any) {
+    console.error('[Review Error]:', error);
+    return { error: 'Failed to review evidence. Please try again.' };
+  }
 }
 
 export async function initiateRandomCheck(data: {
@@ -458,35 +616,77 @@ export async function createUser(data: {
   department?: string;
   studentId?: string;
 }) {
-  const user = await getCurrentUser();
-  if (!user || user.role !== 'admin') throw new Error('Unauthorized');
+  try {
+    const user = await getCurrentUser();
+    if (!user || user.role !== 'admin') {
+      return { error: 'Only administrators can create new users' };
+    }
 
-  const userId = generateId();
-  const hashedPassword = await hashPassword(data.password);
+    if (!data.email || !data.email.includes('@')) {
+      return { error: 'Valid email is required' };
+    }
 
-  await db.insert(users).values({
-    id: userId,
-    email: data.email,
-    password: hashedPassword,
-    role: data.role,
-    name: data.name,
-  });
+    if (!data.password || data.password.length < 6) {
+      return { error: 'Password must be at least 6 characters long' };
+    }
 
-  if (data.role === 'student' && data.department && data.studentId) {
-    await db.insert(students).values({
-      id: generateId(),
-      userId,
-      studentId: data.studentId,
-      department: data.department,
+    if (!data.name || data.name.trim().length === 0) {
+      return { error: 'Name is required' };
+    }
+
+    if (!['student', 'supervisor', 'admin'].includes(data.role)) {
+      return { error: 'Invalid role' };
+    }
+
+    // Check if email already exists
+    const [existingUser] = await db.select().from(users).where(eq(users.email, data.email));
+    if (existingUser) {
+      return { error: 'Email already registered' };
+    }
+
+    if ((data.role === 'student' || data.role === 'supervisor') && !data.department) {
+      return { error: 'Department is required for students and supervisors' };
+    }
+
+    const userId = generateId();
+    const hashedPassword = await hashPassword(data.password);
+
+    await db.insert(users).values({
+      id: userId,
+      email: data.email,
+      password: hashedPassword,
+      role: data.role,
+      name: data.name,
     });
-  } else if (data.role === 'supervisor' && data.department) {
-    await db.insert(supervisors).values({
-      id: generateId(),
-      userId,
-      department: data.department,
-    });
+
+    if (data.role === 'student' && data.department && data.studentId) {
+      if (!data.studentId.trim()) {
+        return { error: 'Student ID is required' };
+      }
+      
+      await db.insert(students).values({
+        id: generateId(),
+        userId,
+        studentId: data.studentId,
+        department: data.department,
+      });
+    } else if (data.role === 'supervisor' && data.department) {
+      await db.insert(supervisors).values({
+        id: generateId(),
+        userId,
+        department: data.department,
+      });
+    } else if (data.role === 'admin') {
+      // Admin creation done, no additional setup needed
+    }
+
+    revalidatePath('/admin');
+    return { success: true, message: 'User created successfully' };
+  } catch (error: any) {
+    console.error('[User Creation Error]:', error);
+    if (error.message.includes('unique')) {
+      return { error: 'Email already registered' };
+    }
+    return { error: 'Failed to create user. Please try again.' };
   }
-
-  revalidatePath('/admin');
-  return { success: true };
 }
