@@ -14,26 +14,36 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 export async function createSession(userId: string): Promise<string> {
-  const sessionId = randomUUID();
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + 7);
+  try {
+    const sessionId = randomUUID();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
 
-  await db.insert(sessions).values({
-    id: sessionId,
-    userId,
-    expiresAt,
-  });
+    await db.insert(sessions).values({
+      id: sessionId,
+      userId,
+      expiresAt,
+    });
 
-  const cookieStore = await cookies();
-  cookieStore.set('session_id', sessionId, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    expires: expiresAt,
-    path: '/',
-  });
+    try {
+      const cookieStore = await cookies();
+      cookieStore.set('session_id', sessionId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        expires: expiresAt,
+        path: '/',
+      });
+    } catch (cookieErr) {
+      // Cookie setting might fail in some environments, but session is still created
+      console.warn('[Auth] Cookie setting warning:', cookieErr);
+    }
 
-  return sessionId;
+    return sessionId;
+  } catch (err) {
+    console.error('[Auth] Session creation error:', err);
+    throw err;
+  }
 }
 
 export async function getCurrentUser() {

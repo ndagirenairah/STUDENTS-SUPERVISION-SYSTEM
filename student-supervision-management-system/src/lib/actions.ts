@@ -23,25 +23,32 @@ export async function login(email: string, password: string) {
     const [user] = await db.select().from(users).where(eq(users.email, email));
 
     if (!user) {
+      console.log('[Auth] User not found:', email);
       return { error: 'Invalid email or password' };
     }
 
     const validPassword = await verifyPassword(password, user.password);
+    console.log('[Auth] Password verification:', { email, valid: validPassword });
     if (!validPassword) {
       return { error: 'Invalid email or password' };
     }
 
-    await createSession(user.id);
-
-    if (user.role === 'student') {
-      redirect('/student');
-    } else if (user.role === 'supervisor') {
-      redirect('/supervisor');
-    } else {
-      redirect('/admin');
+    try {
+      await createSession(user.id);
+      console.log('[Auth] Session created for user:', user.id);
+    } catch (sessionErr: any) {
+      console.error('[Auth] Session creation failed:', sessionErr);
+      return { error: 'Session creation failed. Please try again.' };
     }
+
+    // Return success with role so client can redirect
+    return { 
+      success: true, 
+      role: user.role,
+      message: 'Login successful'
+    };
   } catch (error: any) {
-    console.error('[Auth Error] Login failed:', error);
+    console.error('[Auth Error] Login failed:', error.message, error.stack);
     return { error: 'Login failed. Please try again later.' };
   }
 }
@@ -49,6 +56,92 @@ export async function login(email: string, password: string) {
 export async function logout() {
   await logoutFn();
   redirect('/');
+}
+
+export async function register(data: {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  name: string;
+  role: 'student' | 'supervisor';
+  department: string;
+  studentId?: string;
+}) {
+  try {
+    // Validate input
+    if (!data.email || !data.email.includes('@')) {
+      return { error: 'Valid email is required' };
+    }
+
+    if (!data.password || data.password.length < 6) {
+      return { error: 'Password must be at least 6 characters long' };
+    }
+
+    if (data.password !== data.confirmPassword) {
+      return { error: 'Passwords do not match' };
+    }
+
+    if (!data.name || data.name.trim().length === 0) {
+      return { error: 'Name is required' };
+    }
+
+    if (!data.department || data.department.trim().length === 0) {
+      return { error: 'Department is required' };
+    }
+
+    if (data.role === 'student' && (!data.studentId || data.studentId.trim().length === 0)) {
+      return { error: 'Student ID is required' };
+    }
+
+    // Check if email already exists
+    const [existingUser] = await db.select().from(users).where(eq(users.email, data.email));
+    if (existingUser) {
+      return { error: 'Email already registered. Please log in or use a different email.' };
+    }
+
+    const userId = generateId();
+    const hashedPassword = await hashPassword(data.password);
+
+    // Create user
+    await db.insert(users).values({
+      id: userId,
+      email: data.email,
+      password: hashedPassword,
+      role: data.role,
+      name: data.name,
+    });
+
+    // Create student or supervisor record
+    if (data.role === 'student') {
+      await db.insert(students).values({
+        id: generateId(),
+        userId,
+        studentId: data.studentId!,
+        department: data.department,
+      });
+    } else if (data.role === 'supervisor') {
+      await db.insert(supervisors).values({
+        id: generateId(),
+        userId,
+        department: data.department,
+      });
+    }
+
+    // Create session
+    await createSession(userId);
+
+    return { 
+      success: true,
+      role: data.role,
+      message: 'Registration successful'
+    };
+  } catch (error: any) {
+    console.error('[Registration Error]:', error);
+    if (error.message.includes('unique')) {
+      return { error: 'Email already registered' };
+    }
+    return { error: 'Registration failed. Please try again.' };
+  }
 }
 
 // Student Actions

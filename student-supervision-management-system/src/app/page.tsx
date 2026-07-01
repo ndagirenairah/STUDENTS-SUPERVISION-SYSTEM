@@ -1,10 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { login } from '@/lib/actions';
 import { Shield, Users, TrendingUp, CheckCircle } from 'lucide-react';
 
 export default function HomePage() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -19,8 +21,18 @@ export default function HomePage() {
       const result = await login(email, password);
       if (result?.error) {
         setError(result.error);
+      } else if (result?.success) {
+        // Redirect based on role
+        if (result.role === 'student') {
+          router.push('/student');
+        } else if (result.role === 'supervisor') {
+          router.push('/supervisor');
+        } else {
+          router.push('/admin');
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
+      console.error('[v0] Login error:', err);
       setError('An error occurred. Please try again.');
     } finally {
       setLoading(false);
@@ -113,8 +125,14 @@ export default function HomePage() {
               </button>
             </form>
 
-            <div className="mt-4 text-center">
-              <a href="/help" className="text-sm text-blue-600 hover:underline">
+            <div className="mt-6 space-y-3 text-center">
+              <div className="text-sm text-slate-600">
+                Don&apos;t have an account?{' '}
+                <a href="/register" className="text-blue-600 font-medium hover:underline">
+                  Create one here
+                </a>
+              </div>
+              <a href="/help" className="text-sm text-slate-600 hover:underline block">
                 System Documentation & Help
               </a>
             </div>
