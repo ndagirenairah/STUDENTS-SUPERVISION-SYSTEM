@@ -76,15 +76,46 @@ export default function StudentDashboardClient({ data, logoutAction }: { data: D
     setCameraActive(false);
   };
 
-  const captureSelfie = () => {
+  const captureSelfie = async () => {
     if (videoRef.current) {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
-      const photo = canvas.toDataURL('image/jpeg');
-      setSelfiePhoto(photo);
-      stopCamera();
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0);
+        
+        // Convert canvas to blob
+        const blob = await new Promise<Blob | null>(resolve => {
+          canvas.toBlob(resolve, 'image/jpeg', 0.8);
+        });
+        
+        if (!blob) {
+          alert('Failed to capture image. Please try again.');
+          return;
+        }
+        
+        // Upload to Vercel Blob
+        const formData = new FormData();
+        formData.append('file', blob, `selfie-${Date.now()}.jpg`);
+        
+        const response = await fetch('/api/upload/selfie', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          const error = await response.json();
+          alert(`Failed to upload image: ${error.error || 'Unknown error'}`);
+          return;
+        }
+        
+        const { pathname } = await response.json();
+        setSelfiePhoto(pathname); // Store pathname instead of base64
+        stopCamera();
+      } catch (err: any) {
+        console.error('[Selfie Capture Error]:', err);
+        alert('Failed to capture selfie. Please try again.');
+      }
     }
   };
 
@@ -481,7 +512,11 @@ export default function StudentDashboardClient({ data, logoutAction }: { data: D
                   )}
                   {selfiePhoto && (
                     <div className="space-y-2">
-                      <img src={selfiePhoto} alt="Selfie" className="w-full rounded-lg" />
+                      <img 
+                        src={`/api/file?pathname=${encodeURIComponent(selfiePhoto)}`} 
+                        alt="Selfie" 
+                        className="w-full rounded-lg" 
+                      />
                       <button
                         onClick={() => setSelfiePhoto(null)}
                         className="text-sm text-red-600 hover:underline"
